@@ -1028,12 +1028,12 @@
     };
 
     // --- SETTINGS VIEW ---
-    const SettingsView = ({ data, updateData, setData, setModal }) => {
-      // ... (unchanged)
+    const SettingsView = ({ data, updateData, setData, setModal, drive }) => {
       const [localClassesText, setLocalClassesText] = useState(data.rawClassInput);
       const [localQTypesText, setLocalQTypesText] = useState((data.questionTypes || DEFAULT_QUESTION_TYPES).join(', '));
       const [localTermStart, setLocalTermStart] = useState(data.timetableConfig?.termStart || '');
       const [localFirstWeekType, setLocalFirstWeekType] = useState(data.timetableConfig?.firstWeekType || 'A');
+      const [driveSyncing, setDriveSyncing] = useState(false);
 
       const handleClassesBlur = () => {
         const newClasses = parseClassInput(localClassesText);
@@ -1079,12 +1079,37 @@
         reader.readAsText(file);
       };
 
+      // --- MANUAL DRIVE SYNC HANDLERS ---
+      const handleDriveExport = async () => {
+        if (!drive.isSignedIn) return alert("Please connect to Google Drive first via the floating button.");
+        setDriveSyncing(true);
+        const success = await drive.saveToDrive(data);
+        setDriveSyncing(false);
+        if (success) alert("✅ Data successfully pushed to Google Drive!");
+        else alert("❌ Failed to push data to Google Drive.");
+      };
+
+      const handleDriveImport = async () => {
+        if (!drive.isSignedIn) return alert("Please connect to Google Drive first via the floating button.");
+        if (!window.confirm("⚠️ This will overwrite your current local data with the data from Google Drive. Continue?")) return;
+        setDriveSyncing(true);
+        const loadedData = await drive.loadFromDrive();
+        setDriveSyncing(false);
+        if (loadedData) {
+          setData(loadedData);
+          alert("✅ Data successfully pulled from Google Drive!");
+        } else {
+          alert("❌ No data found on Google Drive, or import failed.");
+        }
+      };
+
       return (
         <div className="space-y-6 max-w-2xl mx-auto">
           <h2 className="text-2xl font-bold text-gray-800 flex items-center"><i className="fa-solid fa-cog mr-2 text-gray-600"></i> Settings & Data</h2>
           
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 space-y-6">
             
+            {/* ... Taught Classes Section (Unchanged) ... */}
             <div>
               <h3 className="text-lg font-bold text-gray-800 mb-4">Taught Classes / Subjects</h3>
               <div className="mb-4">
@@ -1107,6 +1132,7 @@
 
             <hr className="border-gray-100" />
 
+            {/* ... Exams Configuration (Unchanged) ... */}
             <div>
               <h3 className="text-lg font-bold text-gray-800 mb-4">Exams Configuration</h3>
               <div className="mb-4">
@@ -1118,6 +1144,7 @@
 
             <hr className="border-gray-100" />
 
+            {/* ... Timetable Configuration (Unchanged) ... */}
             <div>
               <h3 className="text-lg font-bold text-gray-800 mb-4">Timetable Configuration</h3>
               
@@ -1174,18 +1201,59 @@
 
             <hr className="border-gray-100" />
 
+            {/* --- UPDATED BACKUP & RESTORE SECTION --- */}
             <div>
               <h3 className="text-lg font-bold text-gray-800 mb-4">Backup & Restore</h3>
-              <p className="text-sm text-gray-500 mb-4">Export your term data, exams, and timetable to a file to use across devices or keep as backup.</p>
-              <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-4">
-                <button onClick={exportData} className="flex-1 bg-indigo-600 text-white border border-indigo-700 px-4 py-3 rounded-xl font-bold hover:bg-indigo-700 flex items-center justify-center transition shadow-sm"><i className="fa-solid fa-download mr-2"></i> Export Data (.json)</button>
-                <label className="flex-1 bg-white text-gray-800 border border-gray-300 px-4 py-3 rounded-xl font-bold hover:bg-gray-50 flex items-center justify-center cursor-pointer transition shadow-sm"><i className="fa-solid fa-upload mr-2"></i> Import Data<input type="file" accept=".json" className="hidden" onChange={importData} /></label>
+              <p className="text-sm text-gray-500 mb-6">Export your term data, exams, and timetable to a file or manually push/pull from Google Drive.</p>
+              
+              {/* Local File Sync */}
+              <div className="mb-6">
+                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 block">Local Device Sync</span>
+                <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-4">
+                  <button onClick={exportData} className="flex-1 bg-white text-gray-700 border border-gray-300 px-4 py-3 rounded-xl font-bold hover:bg-gray-50 flex items-center justify-center transition shadow-sm">
+                    <i className="fa-solid fa-file-export mr-2"></i> Export Data (.json)
+                  </button>
+                  <label className="flex-1 bg-white text-gray-700 border border-gray-300 px-4 py-3 rounded-xl font-bold hover:bg-gray-50 flex items-center justify-center cursor-pointer transition shadow-sm">
+                    <i className="fa-solid fa-file-import mr-2"></i> Import Data
+                    <input type="file" accept=".json" className="hidden" onChange={importData} />
+                  </label>
+                </div>
               </div>
-              <p className="text-xs text-gray-400 mt-2">Storage used: ~{Math.round(JSON.stringify(data).length / 1024)} KB</p>
+
+              {/* Google Drive Sync */}
+              <div>
+                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 block">Google Drive Sync (Manual)</span>
+                <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-4">
+                  <button 
+                    onClick={handleDriveExport} 
+                    disabled={driveSyncing || !drive.isSignedIn}
+                    className={`flex-1 px-4 py-3 rounded-xl font-bold flex items-center justify-center transition shadow-sm ${!drive.isSignedIn ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200' : 'bg-green-600 text-white hover:bg-green-700'}`}
+                  >
+                    {driveSyncing ? <i className="fa-solid fa-spinner fa-spin mr-2"></i> : <i className="fa-brands fa-google-drive mr-2"></i>} 
+                    Push to Drive
+                  </button>
+                  <button 
+                    onClick={handleDriveImport} 
+                    disabled={driveSyncing || !drive.isSignedIn}
+                    className={`flex-1 px-4 py-3 rounded-xl font-bold flex items-center justify-center transition shadow-sm border ${!drive.isSignedIn ? 'bg-gray-50 text-gray-400 border-gray-200 cursor-not-allowed' : 'bg-white text-green-700 border-green-600 hover:bg-green-50'}`}
+                  >
+                    {driveSyncing ? <i className="fa-solid fa-spinner fa-spin mr-2"></i> : <i className="fa-solid fa-cloud-arrow-down mr-2"></i>} 
+                    Pull from Drive
+                  </button>
+                </div>
+                {!drive.isSignedIn && (
+                  <p className="text-xs text-orange-500 mt-2 font-semibold">
+                    <i className="fa-solid fa-circle-info mr-1"></i> Connect Drive using the floating widget to enable manual sync.
+                  </p>
+                )}
+              </div>
+
+              <p className="text-xs text-gray-400 mt-4 text-right">Storage used: ~{Math.round(JSON.stringify(data).length / 1024)} KB</p>
             </div>
 
             <hr className="border-gray-100" />
             
+            {/* ... Danger Zone (Unchanged) ... */}
             <div>
               <h3 className="text-lg font-bold text-red-600 mb-4 flex items-center"><i className="fa-solid fa-triangle-exclamation mr-2"></i> Danger Zone</h3>
               <div className="bg-red-50 p-4 rounded-xl border border-red-200 flex flex-col sm:flex-row justify-between items-center">
@@ -1198,7 +1266,7 @@
         </div>
       );
     };
-
+```</SettingsView>
     // --- DEFAULT DATA ---
     const DEFAULT_DATA = {
       weekType: 'A',
@@ -1473,7 +1541,7 @@
             {currentView === 'lessons' && <LessonsView data={data} updateData={updateData} setModal={setModal} />}
             {currentView === 'exams' && <ExamsView data={data} updateData={updateData} />}
             {currentView === 'marks' && <MarksView data={data} updateData={updateData} />}
-            {currentView === 'settings' && <SettingsView data={data} updateData={updateData} setData={setData} setModal={setModal} />}
+            {currentView === 'settings' && <SettingsView data={data} updateData={updateData} setData={setData} setModal={setModal} drive={drive} />}
           </div>
 
           <BuyMeCoffee />
