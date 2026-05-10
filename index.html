@@ -152,30 +152,32 @@
 
       // Find the app's data file
       const findFile = async (token) => {
+        let loadedFileId = fileId;
         if (!gapiReady) return;
         try {
           const res = await window.gapi.client.drive.files.list({
             q: `name = '${DATA_FILENAME}' and trashed = false`,
-            spaces: 'drive',
+            spaces: 'appDataFolder',           // ← search hidden folder
             fields: 'files(id, name)',
             access_token: token,
           });
           if (res.result.files.length > 0) {
-            setFileId(res.result.files[0].id);
+            loadedFileId = res.result.files[0].id;
           }
         } catch (err) {
           console.warn('Drive file search failed:', err);
         }
+        setFileId(loadedFileId);  // important: store the found ID
+        return loadedFileId;
       };
 
       // Read data from Drive
-      const loadFromDrive = async (token = accessToken) => {
+     const loadFromDrive = async (token = accessToken) => {
         if (!gapiReady || !token) return null;
         try {
-          // First find file
           const listRes = await window.gapi.client.drive.files.list({
             q: `name = '${DATA_FILENAME}' and trashed = false`,
-            spaces: 'drive',
+            spaces: 'appDataFolder',           // ← fix here too
             fields: 'files(id)',
             access_token: token,
           });
@@ -190,15 +192,12 @@
           });
           return JSON.parse(getRes.body);
         } catch (err) {
-          if (err?.result?.error?.code === 401) {
-            // Token expired → sign out and prompt again
-            signOut();
-          }
+          if (err?.result?.error?.code === 401) signOut();
           console.error('Drive load error:', err);
           return null;
         }
       };
-
+      
       // Save data to Drive
       const saveToDrive = async (data, token = accessToken, existingFileId = fileId) => {
         if (!gapiReady || !token) return false;
