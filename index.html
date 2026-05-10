@@ -279,24 +279,6 @@
               </button>
             );
           })}
-          {/* Google Drive Button */}
-          <button
-            onClick={() => {
-              setNavOpen(false);
-              if (!driveStatus.isSignedIn) driveStatus.signIn();
-              else driveStatus.signOut();
-            }}
-            className={`absolute top-2 left-2 w-10 h-10 md:w-12 md:h-12 bg-white text-indigo-700 rounded-full flex items-center justify-center shadow-md transition-all duration-300`}
-            style={{
-              transform: `translate(0px, ${navOpen ? 60 + (navItems.length * 50) : 0}px) scale(${navOpen ? 1 : 0})`,
-              opacity: navOpen ? 1 : 0,
-              pointerEvents: navOpen ? 'auto' : 'none',
-              transitionDelay: `${navItems.length * 30}ms`
-            }}
-            title={driveStatus.isSignedIn ? 'Sign out of Google Drive' : 'Connect Google Drive'}
-          >
-            <i className={`fa-brands fa-google-drive ${driveStatus.isSignedIn ? 'text-green-500' : ''}`} style={{fontSize: '18px'}}></i>
-          </button>
         </div>
       );
     };
@@ -1270,6 +1252,78 @@
       // Google Drive hooks
       const drive = useGoogleDrive();
 
+      // --- GOOGLE DRIVE SYNC PANEL ---
+      const SyncPanel = ({ drive, onSync }) => {
+        const [syncing, setSyncing] = useState(false);
+        const [lastSync, setLastSync] = useState(null);
+      
+        const handleSync = async () => {
+          if (!drive.isSignedIn || !drive.gapiReady) return;
+          setSyncing(true);
+          try {
+            await onSync(); // function that triggers save + reload if needed
+            setLastSync(new Date());
+          } catch (e) {
+            console.error('Sync failed', e);
+          } finally {
+            setSyncing(false);
+          }
+        };
+      
+        return (
+          <div className="fixed bottom-6 left-6 z-50 backdrop-blur-md bg-white/80 border border-gray-200/60 shadow-lg rounded-2xl p-3 flex items-center gap-3 transition-all duration-300 hover:shadow-xl">
+            {/* Drive icon & status */}
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center ${drive.isSignedIn ? 'bg-green-100' : 'bg-gray-100'}`}>
+              <i className={`fa-brands fa-google-drive ${drive.isSignedIn ? 'text-green-600' : 'text-gray-400'}`} style={{fontSize: '18px'}}></i>
+            </div>
+            
+            <div className="flex flex-col">
+              <span className="text-xs font-bold text-gray-700">
+                {drive.isSignedIn ? 'Drive connected' : 'Drive disconnected'}
+              </span>
+              {drive.isSignedIn && lastSync && (
+                <span className="text-[10px] text-gray-400">
+                  Synced {formatTime(lastSync)}
+                </span>
+              )}
+            </div>
+      
+            {/* Buttons */}
+            <div className="flex gap-2">
+              {!drive.isSignedIn ? (
+                <button
+                  onClick={drive.signIn}
+                  className="px-3 py-1.5 text-xs font-bold bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition shadow-sm"
+                >
+                  Connect
+                </button>
+              ) : (
+                <>
+                  <button
+                    onClick={handleSync}
+                    disabled={syncing}
+                    className={`px-3 py-1.5 text-xs font-bold rounded-lg transition shadow-sm ${
+                      syncing
+                        ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                        : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                    }`}
+                  >
+                    <i className={`fa-solid ${syncing ? 'fa-spinner fa-spin' : 'fa-cloud-arrow-up'} mr-1`}></i>
+                    {syncing ? 'Syncing…' : 'Sync Now'}
+                  </button>
+                  <button
+                    onClick={drive.signOut}
+                    className="px-3 py-1.5 text-xs font-bold bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition border border-red-200"
+                  >
+                    Disconnect
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      };
+
       // Initialize data: try Drive first, then localStorage, then default
       const [data, setData] = useState(DEFAULT_DATA);
       const [dataLoaded, setDataLoaded] = useState(false);
@@ -1383,6 +1437,11 @@
           </React.Fragment>
         );
       };
+
+      <SyncPanel drive={drive} onSync={() => {
+        // Force a save + subsequent load to sync both ways
+        return drive.saveToDrive(data).then(() => drive.loadFromDrive());
+      }} />
 
       // "Buy me a coffee" link
       const BuyMeCoffee = () => (
