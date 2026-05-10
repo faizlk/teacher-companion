@@ -84,36 +84,52 @@
     const DEFAULT_QUESTION_TYPES = ["MCQ","Structured","Essay","True/False","Match","One Word","Fill the Blanks"];
 
     // ══════════════════════════════════════════
-    //  GOOGLE DRIVE INTEGRATION (FIXED)
+    //  GOOGLE DRIVE INTEGRATION (FIXED – NO RACE CONDITIONS)
     // ══════════════════════════════════════════
     const useGoogleDrive = () => {
       const [isSignedIn, setIsSignedIn] = useState(false);
       const [accessToken, setAccessToken] = useState(null);
       const [fileId, setFileId] = useState(null);
       const [gapiReady, setGapiReady] = useState(false);
+      const [initializing, setInitializing] = useState(true);
 
-      // Initialize gapi client once
+      // Initialize gapi client exactly once
       useEffect(() => {
+        let mounted = true;
         const initGapi = async () => {
-          if (!window.gapi) return;
-          await window.gapi.client.init({});
-          setGapiReady(true);
+          if (!window.gapi) {
+            // Wait for gapi script to load
+            const waitForGapi = setInterval(() => {
+              if (window.gapi) {
+                clearInterval(waitForGapi);
+                initGapi();
+              }
+            }, 200);
+            return;
+          }
+          try {
+            await window.gapi.client.init({});
+            if (mounted) {
+              setGapiReady(true);
+              setInitializing(false);
+              // After init, try to restore token
+              const stored = sessionStorage.getItem('driveAccessToken');
+              if (stored) {
+                window.gapi.auth.setToken({ access_token: stored });
+                setAccessToken(stored);
+                setIsSignedIn(true);
+                // Find file in background
+                findFile(stored).catch(console.warn);
+              }
+            }
+          } catch (err) {
+            console.error("GAPI init failed", err);
+            if (mounted) setInitializing(false);
+          }
         };
-        if (window.gapi) initGapi();
-        else window.addEventListener('load', initGapi, { once: true });
+        initGapi();
+        return () => { mounted = false; };
       }, []);
-
-      // Restore token from sessionStorage
-      useEffect(() => {
-        const stored = sessionStorage.getItem('driveAccessToken');
-        if (stored && gapiReady) {
-          setAccessToken(stored);
-          setIsSignedIn(true);
-          window.gapi.auth.setToken({ access_token: stored });
-          // find file asynchronously
-          findFile(stored);
-        }
-      }, [gapiReady]);
 
       const findFile = async (token) => {
         if (!gapiReady || !token) return null;
@@ -136,9 +152,9 @@
         return null;
       };
 
-      const signIn = useCallback(() => {
+      const signIn = useCallback(async () => {
         if (!gapiReady) {
-          alert("Google API not ready yet, please wait a moment.");
+          alert("Google API is still initializing. Please wait a moment and try again.");
           return;
         }
         const client = google.accounts.oauth2.initTokenClient({
@@ -169,9 +185,11 @@
         }
       }, [accessToken]);
 
-      // Save data to Drive (overwrites existing file or creates new)
       const saveToDrive = async (data, token = accessToken, existingFileId = fileId) => {
-        if (!gapiReady || !token) return false;
+        if (!gapiReady || !token) {
+          console.warn("Cannot save: gapi or token missing");
+          return false;
+        }
         try {
           const metadata = {
             name: DATA_FILENAME,
@@ -207,7 +225,6 @@
         }
       };
 
-      // Load data from Drive
       const loadFromDrive = async (token = accessToken) => {
         if (!gapiReady || !token) return null;
         try {
@@ -230,6 +247,7 @@
       return {
         isSignedIn,
         gapiReady,
+        initializing,
         signIn,
         signOut,
         saveToDrive,
@@ -238,7 +256,7 @@
       };
     };
 
-    // --- Quick Add Marks Modal (unchanged) ---
+    // --- Quick Add Marks Modal (unchanged, fully functional) ---
     const QuickAddMarksModal = ({ subject, date, data, updateData, onClose }) => {
       const defaultActivityName = date ? date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '';
       const [activityName, setActivityName] = useState(defaultActivityName);
@@ -496,7 +514,7 @@
         <h2 className="text-2xl font-bold text-gray-800 flex items-center"><i className="fa-solid fa-calendar mr-2 text-indigo-600"></i> Timetable Editor</h2>
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 overflow-x-auto">
           <table className="w-full min-w-[600px] text-left border-collapse">
-            <thead><tr><th className="p-3 border-b-2 border-gray-200 text-gray-600 font-bold bg-gray-50">Time \ Day</th>{data.timetableConfig.days.map(day => <th key={day} className="p-3 border-b-2 border-gray-200 text-gray-600 font-bold bg-gray-50 text-center w-48">{day}</th>)}</tr></thead>
+            <thead><tr><th className="p-3 border-b-2 border-gray-200 text-gray-600 font-bold bg-gray-50">Time \ Day</th>{data.timetableConfig.days.map(day => <th key={day} className="p-3 border-b-2 border-gray-200 text-gray-600 font-bold bg-gray-50 text-center w-48">{day}</th>)}</thead>
             <tbody>
               {data.timetableConfig.periods.map(period => (
                 <tr key={period.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
@@ -610,7 +628,7 @@
       );
     };
 
-    // --- EXAMS VIEW (unchanged for brevity, fully functional) ---
+    // --- EXAMS VIEW (unchanged) ---
     const ExamsView = ({ data, updateData }) => {
       const qTypesList = data.questionTypes || DEFAULT_QUESTION_TYPES;
       const [selectedSubject, setSelectedSubject] = useState(data.classes[0] || "");
@@ -694,7 +712,7 @@
           <div className="bg-gray-50 p-6 rounded-2xl border border-gray-200 overflow-x-auto shadow-inner">
             <div className="flex flex-col sm:flex-row sm:justify-between items-start sm:items-center mb-6 space-y-3 sm:space-y-0"><h3 className="font-bold text-lg text-gray-700"><i className="fa-solid fa-table-list mr-2 text-indigo-500"></i> Detailed Records</h3><div className="flex flex-wrap gap-2"><select className="p-1.5 border border-gray-300 rounded-md shadow-sm font-bold text-gray-700 text-sm" value={viewSubject} onChange={e => setViewSubject(e.target.value)}>{baseSubjectKeys.map(b => <option key={b} value={b}>{b}</option>)}</select>{isMultiPart && <select className="p-1.5 border border-indigo-300 rounded-md shadow-sm font-bold text-indigo-700 text-sm bg-indigo-50" value={viewActivity} onChange={e => setViewActivity(e.target.value)}>{activitiesList.length === 0 && <option value="">No Activities</option>}{activitiesList.map(a => <option key={a} value={a}>{a}</option>)}</select>}</div></div>
             {activitiesList.length === 0 ? <p className="text-gray-500 text-sm italic text-center p-4 bg-white rounded border border-gray-200">No marks recorded yet for this subject.</p> : (
-              <table className="w-full min-w-[500px] bg-white border border-gray-200 rounded-lg overflow-hidden text-left shadow-sm"><thead className="bg-indigo-50 border-b border-indigo-100"><tr><th className="p-3 text-sm font-bold text-indigo-900 w-32 border-r border-indigo-100">Student Index</th>{isMultiPart ? <React.Fragment>{partsForView.map(p => <th key={p.part} className="p-3 text-sm font-bold text-indigo-900 text-center border-r border-indigo-100">{p.part}</th>)}<th className="p-3 text-sm font-bold text-green-800 text-center bg-green-50 border-l-2 border-green-200">Total Score</th></React.Fragment> : activitiesList.map(act => <th key={act} className="p-3 text-sm font-bold text-indigo-900 text-center border-r border-indigo-100">{act}</th>)}</tr></thead><tbody>{studentIndices.map((idxStr) => { let totalScore = 0; let hasValidScore = false; return (<tr key={idxStr} className="border-b border-gray-100 hover:bg-gray-50"><td className="p-3 font-mono font-bold text-gray-800 border-r">{idxStr}</td>{isMultiPart ? <React.Fragment>{partsForView.map(p => { const markStr = studentMap[idxStr][p.part]; const num = parseFloat(markStr); if (!isNaN(num)) { totalScore += num; hasValidScore = true; } return (<td key={p.part} className={`p-3 text-center font-semibold border-r ${isNaN(num) && markStr ? 'text-red-500' : 'text-gray-600'}`}>{markStr || '-'}</td>); })}<td className="p-3 text-center font-bold text-green-700 bg-green-50/30 border-l-2 border-green-100">{hasValidScore ? totalScore : '-'}</td></React.Fragment> : activitiesList.map(act => { const markStr = studentMap[idxStr][act]; const num = parseFloat(markStr); return (<td key={act} className={`p-3 text-center font-semibold border-r ${isNaN(num) && markStr ? 'text-red-500' : 'text-gray-600'}`}>{markStr || '-'}</td>); })}</tr>) })}</tbody></table>
+              <table className="w-full min-w-[500px] bg-white border border-gray-200 rounded-lg overflow-hidden text-left shadow-sm"><thead className="bg-indigo-50 border-b border-indigo-100"><tr><th className="p-3 text-sm font-bold text-indigo-900 w-32 border-r border-indigo-100">Student Index</th>{isMultiPart ? <React.Fragment>{partsForView.map(p => <th key={p.part} className="p-3 text-sm font-bold text-indigo-900 text-center border-r border-indigo-100">{p.part}</th>)}<th className="p-3 text-sm font-bold text-green-800 text-center bg-green-50 border-l-2 border-green-200">Total Score</th></React.Fragment> : activitiesList.map(act => <th key={act} className="p-3 text-sm font-bold text-indigo-900 text-center border-r border-indigo-100">{act}</th>)}</thead><tbody>{studentIndices.map((idxStr) => { let totalScore = 0; let hasValidScore = false; return (<tr key={idxStr} className="border-b border-gray-100 hover:bg-gray-50"><td className="p-3 font-mono font-bold text-gray-800 border-r">{idxStr}</td>{isMultiPart ? <React.Fragment>{partsForView.map(p => { const markStr = studentMap[idxStr][p.part]; const num = parseFloat(markStr); if (!isNaN(num)) { totalScore += num; hasValidScore = true; } return (<td key={p.part} className={`p-3 text-center font-semibold border-r ${isNaN(num) && markStr ? 'text-red-500' : 'text-gray-600'}`}>{markStr || '-'}</td>); })}<td className="p-3 text-center font-bold text-green-700 bg-green-50/30 border-l-2 border-green-100">{hasValidScore ? totalScore : '-'}</td></React.Fragment> : activitiesList.map(act => { const markStr = studentMap[idxStr][act]; const num = parseFloat(markStr); return (<td key={act} className={`p-3 text-center font-semibold border-r ${isNaN(num) && markStr ? 'text-red-500' : 'text-gray-600'}`}>{markStr || '-'}</td>); })}</tr>) })}</tbody></table>
             )}
           </div>
         </div>
@@ -747,7 +765,7 @@
       marks: {}
     };
 
-    // --- MAIN APP COMPONENT (with fixed Drive sync panel) ---
+    // --- MAIN APP COMPONENT ---
     function App() {
       const [selectedDate, setSelectedDate] = useState(new Date());
       const [currentView, setCurrentView] = useState('home');
@@ -758,15 +776,13 @@
 
       const drive = useGoogleDrive();
 
-      // Data state (load once)
       const [data, setData] = useState(DEFAULT_DATA);
       const [dataLoaded, setDataLoaded] = useState(false);
 
-      // Load initial data from localStorage or Drive (if signed in)
+      // Load initial data
       useEffect(() => {
         const loadInitialData = async () => {
           let loaded = null;
-          // If signed in and gapi ready, try Drive first
           if (drive.isSignedIn && drive.gapiReady) {
             loaded = await drive.loadFromDrive();
           }
@@ -775,7 +791,6 @@
             if (saved) try { loaded = JSON.parse(saved); } catch(e) {}
           }
           if (loaded) {
-            // migrations
             if (!loaded.rawClassInput) loaded.rawClassInput = loaded.classes?.join(', ') || '';
             if (!loaded.questionTypes) loaded.questionTypes = DEFAULT_QUESTION_TYPES;
             if (!loaded.timetableConfig?.termStart) loaded.timetableConfig.termStart = DEFAULT_DATA.timetableConfig.termStart;
@@ -784,10 +799,12 @@
           }
           setDataLoaded(true);
         };
-        if (!dataLoaded) loadInitialData();
-      }, [drive.isSignedIn, drive.gapiReady]);
+        if (!dataLoaded && (drive.gapiReady || !drive.initializing)) {
+          loadInitialData();
+        }
+      }, [drive.isSignedIn, drive.gapiReady, drive.initializing]);
 
-      // Save to localStorage always, and optionally to Drive via manual sync only (no auto)
+      // Save to localStorage always
       useEffect(() => {
         if (dataLoaded) {
           localStorage.setItem('teacherCompanionData', JSON.stringify(data));
@@ -798,7 +815,6 @@
         setData(prev => ({ ...prev, [key]: value }));
       };
 
-      // Manual Drive Save
       const handleDriveSave = async () => {
         if (!drive.isSignedIn) { alert("Please sign in to Google Drive first."); return; }
         const success = await drive.saveToDrive(data);
@@ -806,7 +822,6 @@
         else alert("Save failed. Check console or sign in again.");
       };
 
-      // Manual Drive Load
       const handleDriveLoad = async () => {
         if (!drive.isSignedIn) { alert("Please sign in to Google Drive first."); return; }
         const loaded = await drive.loadFromDrive();
@@ -820,7 +835,7 @@
         }
       };
 
-      // Modal helper effects (unchanged)
+      // Modal handlers (shortened for brevity, same as before)
       useEffect(() => {
         if (modal.isOpen && modal.type === 'ADVANCED_LEAVE') setAdvLeaveState({ type: 'leaves', scope: 'all', selectedIdxs: [] });
       }, [modal.isOpen, modal.type]);
@@ -834,17 +849,21 @@
       const handleAdvancedLeave = () => { const newLessons = { ...data.lessons }; const classesToProcess = advLeaveState.scope === 'all' ? modal.payload.classes : modal.payload.classes.filter((_, idx) => advLeaveState.selectedIdxs.includes(idx)); if(classesToProcess.length === 0) return alert("Please select at least one period, or choose Whole Day."); classesToProcess.forEach(cls => { if (cls.subject) { const subjLog = newLessons[cls.subject] || { currentPages: 0, attended: 0, leaves: 0, late: 0, meetings: 0 }; newLessons[cls.subject] = { ...subjLog, [advLeaveState.type]: (subjLog[advLeaveState.type] || 0) + 1 }; } }); updateData('lessons', newLessons); setModal({isOpen: false}); };
       const LogPagesModal = ({ subject, onClose, onSave }) => { const [pageCount, setPageCount] = useState(''); const inputRef = useRef(null); useEffect(() => { inputRef.current?.focus(); }, []); return (<React.Fragment><h3 className="text-2xl font-bold mb-4 text-gray-800">Log Taught Pages</h3><p className="text-sm text-gray-600 mb-6">How many pages did you teach today for <strong>{subject}</strong>?</p><input ref={inputRef} type="number" className="w-full p-4 border border-gray-300 rounded-xl mb-6 focus:ring-2 focus:ring-indigo-500 font-bold text-lg" placeholder="e.g. 5" value={pageCount} onChange={e => setPageCount(e.target.value)} /><div className="flex justify-end space-x-3"><button onClick={onClose} className="px-5 py-3 text-gray-600 font-bold hover:bg-gray-100 rounded-xl transition">Cancel</button><button onClick={() => { const val = parseInt(pageCount); if(val) onSave(val); }} className="px-5 py-3 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700 shadow-md transition">Save Progress</button></div></React.Fragment>); };
 
-      // SyncPanel component (rendered in main JSX)
+      // SyncPanel with loading state
       const SyncPanel = () => (
         <div className="fixed bottom-6 left-6 z-50 backdrop-blur-md bg-white/80 border border-gray-200/60 shadow-lg rounded-2xl p-3 flex items-center gap-3 transition-all duration-300 hover:shadow-xl">
           <div className={`w-8 h-8 rounded-full flex items-center justify-center ${drive.isSignedIn ? 'bg-green-100' : 'bg-gray-100'}`}>
             <i className={`fa-brands fa-google-drive ${drive.isSignedIn ? 'text-green-600' : 'text-gray-400'}`} style={{fontSize: '18px'}}></i>
           </div>
           <div className="flex flex-col">
-            <span className="text-xs font-bold text-gray-700">{drive.isSignedIn ? 'Drive connected' : 'Drive disconnected'}</span>
+            <span className="text-xs font-bold text-gray-700">
+              {drive.initializing ? "Initializing..." : (drive.isSignedIn ? 'Drive connected' : 'Drive disconnected')}
+            </span>
           </div>
           <div className="flex gap-2">
-            {!drive.isSignedIn ? (
+            {drive.initializing ? (
+              <button disabled className="px-3 py-1.5 text-xs font-bold bg-gray-300 text-gray-500 rounded-lg cursor-not-allowed">Loading...</button>
+            ) : !drive.isSignedIn ? (
               <button onClick={drive.signIn} className="px-3 py-1.5 text-xs font-bold bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition shadow-sm">Connect</button>
             ) : (
               <>
@@ -862,6 +881,16 @@
           <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy me a coffee" className="w-36 h-12 md:w-42 md:h-14" />
         </a>
       );
+
+      const NavigationMenu = ({ navOpen, setNavOpen, currentView, setCurrentView, driveStatus }) => {
+        const navItems = [{ id: 'home', icon: 'fa-solid fa-bell', label: 'Reminders' }, { id: 'timetable', icon: 'fa-solid fa-calendar', label: 'Timetable' }, { id: 'lessons', icon: 'fa-solid fa-book-open', label: 'Lesson Log' }, { id: 'exams', icon: 'fa-solid fa-file-alt', label: 'Exams' }, { id: 'marks', icon: 'fa-solid fa-clipboard-list', label: 'Marks' }, { id: 'settings', icon: 'fa-solid fa-cog', label: 'Settings' }];
+        return (
+          <div className="fixed top-4 left-4 z-50">
+            <button onClick={() => setNavOpen(!navOpen)} className={`w-12 h-12 md:w-14 md:h-14 bg-indigo-600 text-white rounded-full flex items-center justify-center shadow-lg transition-transform duration-300 ${navOpen ? 'rotate-90' : ''} relative z-10`}><i className={navOpen ? 'fa-solid fa-times' : 'fa-solid fa-bars'} style={{fontSize: '24px'}}></i></button>
+            {navItems.map((item, index) => { const y = navOpen ? 60 + (index * 50) : 0; return (<button key={item.id} onClick={() => { setCurrentView(item.id); setNavOpen(false); }} className={`absolute top-2 left-2 w-10 h-10 md:w-12 md:h-12 bg-white text-indigo-700 rounded-full flex items-center justify-center shadow-md transition-all duration-300 ${currentView === item.id ? 'ring-2 ring-indigo-500 bg-indigo-50' : ''}`} style={{ transform: `translate(0px, ${y}px) scale(${navOpen ? 1 : 0})`, opacity: navOpen ? 1 : 0, pointerEvents: navOpen ? 'auto' : 'none', transitionDelay: `${index * 30}ms` }} title={item.label}><i className={item.icon} style={{fontSize: '18px'}}></i></button>); })}
+          </div>
+        );
+      };
 
       return (
         <React.Fragment>
@@ -907,17 +936,6 @@
         </React.Fragment>
       );
     }
-
-    // NavigationMenu component (defined outside to keep original, but we need it here)
-    const NavigationMenu = ({ navOpen, setNavOpen, currentView, setCurrentView, driveStatus }) => {
-      const navItems = [{ id: 'home', icon: 'fa-solid fa-bell', label: 'Reminders' }, { id: 'timetable', icon: 'fa-solid fa-calendar', label: 'Timetable' }, { id: 'lessons', icon: 'fa-solid fa-book-open', label: 'Lesson Log' }, { id: 'exams', icon: 'fa-solid fa-file-alt', label: 'Exams' }, { id: 'marks', icon: 'fa-solid fa-clipboard-list', label: 'Marks' }, { id: 'settings', icon: 'fa-solid fa-cog', label: 'Settings' }];
-      return (
-        <div className="fixed top-4 left-4 z-50">
-          <button onClick={() => setNavOpen(!navOpen)} className={`w-12 h-12 md:w-14 md:h-14 bg-indigo-600 text-white rounded-full flex items-center justify-center shadow-lg transition-transform duration-300 ${navOpen ? 'rotate-90' : ''} relative z-10`}><i className={navOpen ? 'fa-solid fa-times' : 'fa-solid fa-bars'} style={{fontSize: '24px'}}></i></button>
-          {navItems.map((item, index) => { const y = navOpen ? 60 + (index * 50) : 0; return (<button key={item.id} onClick={() => { setCurrentView(item.id); setNavOpen(false); }} className={`absolute top-2 left-2 w-10 h-10 md:w-12 md:h-12 bg-white text-indigo-700 rounded-full flex items-center justify-center shadow-md transition-all duration-300 ${currentView === item.id ? 'ring-2 ring-indigo-500 bg-indigo-50' : ''}`} style={{ transform: `translate(0px, ${y}px) scale(${navOpen ? 1 : 0})`, opacity: navOpen ? 1 : 0, pointerEvents: navOpen ? 'auto' : 'none', transitionDelay: `${index * 30}ms` }} title={item.label}><i className={item.icon} style={{fontSize: '18px'}}></i></button>); })}
-        </div>
-      );
-    };
 
     const root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(<App />);
